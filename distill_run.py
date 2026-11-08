@@ -38,8 +38,28 @@ dz = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(dz)
 
 
-def h_of(day, who, text):
-    return hashlib.md5((day + who.strip()[-12:] + text[:120]).encode('utf-8')).hexdigest()[:16]
+def h_of(day, who, text, tm=''):
+    """唯一哈希：日期 + 时间 + 正文前 120 字。
+
+    故意不含说话人标签——标签改一次（加场合前缀、加分块后缀）哈希就变，
+    这是前面所有"孤儿状态"的根因。正文和时间不会变。
+    """
+    return hashlib.md5((day + (tm or '') + (text or '')[:120]).encode('utf-8')).hexdigest()[:16]
+
+
+def h_alt(day, who, text, tm=''):
+    """再剥一层场合前缀算哈希。
+
+    群聊回忆标签是「回忆·群·某人」，剥一层和剥两层结果不同；
+    创建时用一层、核对时可能用两层，会把状态误判成孤儿。
+    两处都同时比对 h_of / h_alt 就没有歧义。
+    """
+    w2 = dz.clean_name(who)
+    if w2 != who:
+        w2 = dz.clean_name(w2)
+    return hashlib.md5((day + w2[-12:] + (text or '')[:120]).encode('utf-8')).hexdigest()[:16]
+
+
 
 
 def interval_of(n):
@@ -57,11 +77,12 @@ def proc_of(n):
 
 
 def load_state():
+    """状态文件坏了就直接抛错——静默当成空状态会误判全部到期。"""
     if os.path.exists(STATE):
         try:
             return json.load(io.open(STATE, encoding='utf-8')) or {}
-        except Exception:
-            pass
+        except Exception as e:
+            raise RuntimeError(f'记忆状态.json 读取失败：{e}')
     return {}
 
 
@@ -78,7 +99,8 @@ def rewrite_archive(drop_hashes):
     for l in io.open(ARCH, encoding='utf-8', errors='ignore').read().splitlines():
         m = dz.LINE.match(l.strip())
         if m:
-            h = h_of(f'{m.group(1)}-{m.group(2)}', m.group(5).strip(), m.group(6).strip())
+            h = h_of(f'{m.group(1)}-{m.group(2)}', m.group(5).strip(), m.group(6).strip(),
+                     m.group(3) + ':' + m.group(4))
             if h in drop_hashes:
                 continue
         keep.append(l)
@@ -99,20 +121,29 @@ def read_rows():
         if not text:
             continue
         _surface, _who2 = dz.split_surface(m.group(5))
-        rows.append({'h': h_of(day, who, text), 'day': day, 'surface': _surface,
-                     'time': m.group(3) + ':' + m.group(4), 'who': who, 'label': m.group(5).strip(),
+        rows.append({'h': h_of(day, who, text, m.group(3) + ':' + m.group(4)), 'day': day, 'surface': _surface,
+                     'time': m.group(3) + ':' + m.group(4), 'who': who,
+                     'label': m.group(5).strip(),
+                     'h2': h_of(f'{m.group(1)}-{m.group(2)}', m.group(5).strip(),
+                                m.group(6).strip(), m.group(3) + ':' + m.group(4)),
+                     'ts': int(m.group(3)) * 3600 + int(m.group(4)) * 60,
                      'text': text, 'line': line.rstrip('\n')})
     # 私聊里我自己发的话，归到当天最近一次私聊对象
     _last_peer = {}
+    _last_ts = {}
     for r in rows:
         _s = r.get('surface') or ''
-        _is_me = r['who'].startswith('我(') or '机器人' in (r.get('label') or '')
+        _is_me = (r['who'].startswith('我(') or '机器人' in (r.get('label') or '')
+                  or r['who'].startswith('对方('))
         if _s == '私聊' and _is_me:
             peer = _last_peer.get(r['day'])
-            if peer:
-                r['who'] = peer
+            if peer and r['who'].startswith('机器人'):
+                _gap = r.get('ts', 0) - (_last_ts.get(r['day']) or 0)
+                if _gap <= 900:            # 15 分钟内才算同一个对象
+                    r['who'] = peer
         elif _s == '私聊':
             _last_peer[r['day']] = r['who']
+            _last_ts[r['day']] = r.get('ts', 0)
     return rows
 
 
@@ -177,6 +208,56 @@ def save_facts(rows):
     return len(add)
 
 
+
+
+def reconcile(st, rows):
+    """跑完自检：补齐回忆状态、清孤儿、清无效待删、去掉不存在的 orig。幂等。"""
+    mem_h = set()
+    for r in rows:
+        if '回忆·' in r.get('label', '') or '主题·' in r.get('label', ''):
+            mem_h.add(r['h'])
+            for _x in (r.get('h2'), h_of(r['day'], r.get('label', ''), r.get('text', ''))):
+                if _x:
+                    mem_h.add(_x)
+    orig = set()
+    for r in rows:
+        if r['h'] not in mem_h:
+            orig.add(r['h'])
+    try:
+        for f in os.listdir(COLD):
+            if f.endswith('.md'):
+                for l in io.open(os.path.join(COLD, f), encoding='utf-8', errors='ignore'):
+                    m = dz.LINE.match(l.strip())
+                    if m:
+                        orig.add(h_of(f'{m.group(1)}-{m.group(2)}', m.group(5).strip(), m.group(6).strip()))
+    except Exception:
+        pass
+    added = dropped = badpend = fixed = 0
+    for h in mem_h:
+        if h not in st:
+            st[h] = {'stage': 1, 'n': 0, 'interval': interval_of(0), 'ratio': ratio_of(0),
+                     'proc_days': proc_of(0), 'lastHit': int(now_ts()),
+                     'nextDue': int(now_ts() + next_gap(1) * DAY), 'from': 0,
+                     'orig': [], 'rebuilt': True}
+            added += 1
+    # 只补不删：hash 一代对不上就把刚升级的状态删掉，会导致阶段回滚。
+    # 真孤儿交给 reconcile.py 的月度体检处理。
+    for k in list(st.keys()):
+        if k.startswith('pending:') and k[8:] not in orig:
+            st.pop(k); badpend += 1
+    for k, v in st.items():
+        if isinstance(v, dict) and v.get('stage', 0) >= 1 and v.get('orig'):
+            good = [o for o in v['orig'] if o in orig]
+            if good != v['orig']:
+                v['orig'] = good; v['from'] = len(good); fixed += 1
+    if added or dropped or badpend or fixed:
+        print(f'对账：补状态 {added} / 删孤儿 {dropped} / 删无效待删 {badpend} / 修 orig {fixed}')
+    return st
+
+
+def now_ts():
+    return time.time()
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--apply', action='store_true')
@@ -197,16 +278,40 @@ def main():
             print('没有到期的待删原文')
             return
         due_set = set(due)
-        keep = [r['line'] for r in rows if r['h'] not in due_set]
-        io.open(ARCH, 'w', encoding='utf-8').write('\n'.join(keep) + '\n')
+        rewrite_archive(due_set)          # 原子 + 写前重读，别冲掉新聊天
+        # 过渡区里的副本也删，否则原文只是搬了个地方
+        try:
+            for _f in os.listdir(COLD) if os.path.isdir(COLD) else []:
+                if not _f.endswith('.md'):
+                    continue
+                _p = os.path.join(COLD, _f)
+                _keep, _ch = [], 0
+                for _l in io.open(_p, encoding='utf-8', errors='ignore').read().splitlines():
+                    _mm = dz.LINE.match(_l.strip())
+                    if _mm:
+                        _h = h_of(f'{_mm.group(1)}-{_mm.group(2)}', _mm.group(5).strip(), _mm.group(6).strip(),
+                                  _mm.group(3) + ':' + _mm.group(4))
+                        if _h in due_set:
+                            _ch += 1
+                            continue
+                    _keep.append(_l)
+                if _ch:
+                    _tmp = _p + '.tmp'
+                    io.open(_tmp, 'w', encoding='utf-8').write('\n'.join(_keep) + '\n')
+                    os.replace(_tmp, _p)
+                    print(f'  过渡区 {_f} 清掉 {_ch} 条')
+        except Exception as _e:
+            print(f'  过渡区清理失败：{_e}')
         tomb = []
         if os.path.exists(TOMB):
             try:
                 tomb = json.load(io.open(TOMB, encoding='utf-8')) or []
             except Exception:
                 tomb = []
-        tomb.extend(due)
-        io.open(TOMB, 'w', encoding='utf-8').write(json.dumps(tomb, ensure_ascii=False))
+        tomb = sorted(set(tomb) | due_set)
+        _tt = TOMB + '.tmp'
+        io.open(_tt, 'w', encoding='utf-8').write(json.dumps(tomb, ensure_ascii=False))
+        os.replace(_tt, TOMB)
         for h in due:
             st.pop('pending:' + h, None)
         save_state(st)
@@ -220,9 +325,9 @@ def main():
         # 派生出来的回忆/主题行，不再参与压缩（它们由阶段逻辑单独处理）
         if '回忆' in r['who'] or '主题' in r['who']:
             continue
-        if st.get('pending:' + r['h']):
+        if st.get('pending:' + r['h']) or st.get('pending:' + r.get('h2', r['h'])):
             continue          # 原文已压缩，等缓冲期到了删，别再压一遍
-        rec = st.get(r['h']) or {}
+        rec = st.get(r['h']) or st.get(r.get('h2', r['h'])) or {}
         stage = int(rec.get('stage', 0))
         n = int(rec.get('n', 0))
         if rec.get('active'):
@@ -282,17 +387,8 @@ def main():
     to_restore = [h for h, v in st.items() if isinstance(v, dict) and v.get('restore')]
     if to_restore:
         done_r = 0
-        _mem_hash = {}
-        for l in io.open(ARCH, encoding='utf-8', errors='ignore').read().splitlines():
-            mm = dz.LINE.match(l.strip())
-            if not mm:
-                continue
-            lab = mm.group(5).strip()
-            if '回忆·' not in lab and '主题·' not in lab:
-                continue
-            _h = h_of(f'{mm.group(1)}-{mm.group(2)}', lab.split('·', 1)[-1] if '·' in lab else lab,
-                      mm.group(6).strip())
-            _mem_hash[_h] = l
+        _drop_mem = set(to_restore)
+
         for mh in to_restore:
             rec = st.get(mh) or {}
             orig = rec.get('orig') or []
@@ -311,14 +407,7 @@ def main():
                                  'nextDue': int(now + proc_of(_n) * DAY)}
                 done_r += 1
             st.pop(mh, None)
-        _drop_lines = {_mem_hash[h] for h in to_restore if h in _mem_hash}
-        if _drop_lines:
-            _hs = set()
-            for _l in _drop_lines:
-                _mm = dz.LINE.match(_l.strip())
-                if _mm:
-                    _hs.add(h_of(f'{_mm.group(1)}-{_mm.group(2)}', _mm.group(5).strip(), _mm.group(6).strip()))
-            rewrite_archive(_hs)
+        rewrite_archive(set(to_restore))      # 回忆行要真的删掉
         save_state(st)
         print(f'恢复：{done_r} 个包回到 S0（整包原文全部恢复，回忆行已删）')
 
@@ -377,7 +466,7 @@ def main():
                         _label += f'·{_ci}/{len(chunks)}'
                     fa.write(f'- **{day} {chunk[0]["time"]} · 回忆·{_label}**：{s1}\n')
                     hs = [it['h'] for it in chunk]
-                    new_h = h_of(day, _label, s1)
+                    new_h = h_of(day, _label, s1, chunk[0]['time'])
                     for h in hs:
                         st.pop(h, None)
                         st['pending:' + h] = int(now + interval_of(0) * DAY)
@@ -418,7 +507,7 @@ def main():
                 _drop.add(it['line'])                 # 上一级那行要删掉，别越压越多
                 st.pop(it['h'], None)
                 st.pop('pending:' + it['h'], None)
-            new_h = h_of(day, _label, s)
+            new_h = h_of(day, _label, s, items[0]['time'])
             st[new_h] = {'stage': stage + 1, 'n': 0,
                          'interval': interval_of(0), 'ratio': ratio_of(0),
                          'proc_days': ratio_of(0) * interval_of(0),
@@ -442,7 +531,9 @@ def main():
             except Exception:
                 tomb = []
         tomb.extend(sorted(hs))
-        io.open(TOMB, 'w', encoding='utf-8').write(json.dumps(tomb, ensure_ascii=False))
+        _tt = TOMB + '.tmp'
+        io.open(_tt, 'w', encoding='utf-8').write(json.dumps(tomb, ensure_ascii=False))
+        os.replace(_tt, TOMB)
         for v in victims:
             st.pop(v['h'], None)
         save_state(st)
@@ -457,7 +548,8 @@ def main():
                 for _l in io.open(_p, encoding='utf-8', errors='ignore').read().splitlines():
                     _mm = dz.LINE.match(_l.strip())
                     if _mm:
-                        _h = h_of(f'{_mm.group(1)}-{_mm.group(2)}', _mm.group(5).strip(), _mm.group(6).strip())
+                        _h = h_of(f'{_mm.group(1)}-{_mm.group(2)}', _mm.group(5).strip(), _mm.group(6).strip(),
+                                  _mm.group(3) + ':' + _mm.group(4))
                         if _h in hs:
                             _ch += 1
                             continue
@@ -467,8 +559,7 @@ def main():
                     print(f'  过渡区 {_f} 清掉 {_ch} 条')
         except Exception as _e:
             print(f'  过渡区清理失败：{_e}')
-
-    print(f'S3→S4：删掉 {len(victims)} 条')
+        print(f'S3→S4：删掉 {len(victims)} 条')
 
     if _drop:
         _hs2 = set()
@@ -485,6 +576,7 @@ def main():
                and now - (v.get('at') or 0) > CACHE_DAYS * DAY]:
         st.pop(_k, None)
 
+    reconcile(st, rows)
     save_state(st)
     print(f'本轮处理 {done} 个包')
 

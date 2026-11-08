@@ -17,6 +17,7 @@ ARCH = os.path.join(os.environ.get('MEM_DIR', './data/memory'), '归档.md')
 CFG = os.environ.get('MEM_CONFIG', './config.json')
 
 LINE = re.compile(r'- \*\*(\d\d)-(\d\d) (\d\d):(\d\d) · ([^*]+)\*\*：(.*)')
+CHUNK_SUF = re.compile(r"·\d+/\d+$")
 INVIS = re.compile(r'[\u200b-\u200f\u2060-\u206f\ufeff\ue000-\uf8ff\u202a-\u202e]')
 QQ_IN = re.compile(r'[（(](\d{5,12})[）)]')
 
@@ -33,6 +34,22 @@ PROTECT = [
     re.compile(r'\b(git|pip|npm|node|python|uv|curl|schtasks)\s+\S+', re.I),
     re.compile(r'密码|口令|token|密钥|apikey|api[_-]?key', re.I),
 ]
+
+
+def canon_who(raw):
+    """剥掉所有前导的「场合·」前缀，得到唯一署名。
+
+    回忆·群·某人 → 某人
+    私聊·某人    → 某人
+    群1105·某人  → 某人
+    所有算哈希的地方都必须用这个，否则同一行在不同模块里会得到不同哈希。
+    """
+    s = CHUNK_SUF.sub("", (raw or "").strip())
+    prev = None
+    while prev != s:
+        prev = s
+        s = re.sub(r"^(群\d*|群|私聊|回忆|主题)·", "", s)
+    return s
 
 
 def split_surface(raw):
@@ -63,7 +80,10 @@ def clean_name(raw):
         return '我(1000000002)'
     if s.startswith('你') and '电脑上' in s:
         return '对方(1000000001)'
-    s = re.sub(r'^(群\d*|群|私聊|回忆|主题)·', '', s)
+    _prev = None
+    while _prev != s:          # 剥掉所有前导场合前缀，保证哈希唯一
+        _prev = s
+        s = re.sub(r'^(群\d*|群|私聊|回忆|主题)·', '', s)
     s = INVIS.sub('', s)
     m = QQ_IN.search(s)
     qq = m.group(1) if m else ''
@@ -141,7 +161,7 @@ def compress(day, who, items, surface=''):
             nm = QQ_IN.sub('', nm).strip(' ()（）')
             lines.append(f"{it['time']} {nm or '某人'}：{it['text']}")
         else:
-            side = '我' if KNOWN.get(QQ_IN.search(it['who'] or '').group(1) if QQ_IN.search(it['who'] or '') else '', '') == '我' or it['who'].startswith('我(') else '对方'
+            side = '我' if (it['who'] or '').startswith('对方(') or KNOWN.get(QQ_IN.search(it['who'] or '').group(1) if QQ_IN.search(it['who'] or '') else '', '') == '我' or it['who'].startswith('我(') else '对方'
             lines.append(f"{it['time']} {side}：{it['text']}")
     body = '\n'.join(lines)
     _where = ('在群里和' if surface.startswith('群') else ('电脑上跟' if surface == '电脑端' else '私聊里和')) if surface else '和'

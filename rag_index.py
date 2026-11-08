@@ -113,7 +113,7 @@ def entries():
             if len(text) < 3:
                 continue
             _sn = _norm_sender(sender)
-            h = hashlib.md5((d + _sn[-12:] + text[:120]).encode("utf-8")).hexdigest()[:16]
+            h = hashlib.md5((d + hm + text[:120]).encode("utf-8")).hexdigest()[:16]
             out.append({"h": h, "d": d, "m": hm, "s": sender[-14:], "t": text[:MAX_LEN], "k": kind})
     out.extend(watch_entries())
     out.extend(summary_entries())
