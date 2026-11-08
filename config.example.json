@@ -1,0 +1,19 @@
+{
+  "data_dir": "./data/memory",
+  "model": {
+    "api_key": "",
+    "base_url": "https://api.deepseek.com",
+    "model": "deepseek-chat"
+  },
+  "search": {
+    "top_k": 8,
+    "enable_semantic": true,
+    "daily_limit": 3
+  },
+  "distill": {
+    "pack_min_chars": 400,
+    "chunk_max_chars": 6000,
+    "cache_days": 90
+  },
+  "people": {}
+}

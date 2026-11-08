@@ -1,0 +1,4 @@
+name: memory_system
+desc: 会遗忘的记忆：热层注入 + 检索 + 逐级模糊化
+version: 0.1.0
+author: memory-engine

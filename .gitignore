@@ -1,0 +1,22 @@
+# 数据目录（记忆、索引、备份）不进仓库
+data/
+memory/
+*.db
+*.db-journal
+*.zip
+
+# 配置里有 key
+config.json
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# 编辑器
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
