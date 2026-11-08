@@ -251,23 +251,25 @@ def reconcile(st, rows, skip=None):
         pass
     added = dropped = badpend = fixed = 0
     skip = skip or set()
-    # 重新扫一遍归档，按当前真实内容判定孤儿（不要用本轮开头读的旧清单）
-    fresh = set()
+    # 先按归档的真实内容重建"应有的回忆哈希"，后面补状态和删孤儿都用它，
+    # 不要用本轮开头读的旧清单（那时行还没被替换/删除）。
+    mem_h = set()
     try:
         for l in io.open(ARCH, encoding='utf-8', errors='ignore'):
             mm = dz.LINE.match(l.strip())
-            if mm:
-                lab = mm.group(5).strip()
-                if '回忆·' in lab or '主题·' in lab:
-                    fresh.add(h_of(f'{mm.group(1)}-{mm.group(2)}', lab,
-                                   mm.group(6).strip(), mm.group(3) + ':' + mm.group(4)))
+            if not mm:
+                continue
+            lab = mm.group(5).strip()
+            if '回忆·' in lab or '主题·' in lab:
+                mem_h.add(h_of(f'{mm.group(1)}-{mm.group(2)}', lab,
+                               mm.group(6).strip(), mm.group(3) + ':' + mm.group(4)))
     except Exception:
-        fresh = mem_h
+        pass
     for k in list(st.keys()):
         if k.startswith(('pending:', 'cache:')):
             continue
         v = st.get(k)
-        if isinstance(v, dict) and v.get('stage', 0) >= 1 and k not in fresh:
+        if isinstance(v, dict) and v.get('stage', 0) >= 1 and k not in mem_h:
             st.pop(k, None)
     for h in mem_h:
         if h in skip:          # 这一轮刚被恢复删掉的行，别再补状态
