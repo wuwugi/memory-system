@@ -22,8 +22,8 @@ _os0.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 import numpy as np
 
-ROOT = r"."
-MEM = os.path.join(ROOT, "记忆")
+ROOT = os.environ.get("MEM_DIR", "./data/memory")
+MEM = ROOT if os.path.basename(os.path.normpath(ROOT)) != "记忆" else os.path.join(ROOT, "记忆")
 IDX = os.path.join(MEM, "索引")
 SHARED = os.path.join(MEM, "共享记忆.md")
 ARCHIVE = os.path.join(MEM, "归档.md")

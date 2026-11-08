@@ -99,7 +99,11 @@ def query(dirpath, q, top=8, semantic=True):
         if scores[i] <= 0:
             continue
         m = meta[i]
-        out.append(f"- [{m.get('day','')} {m.get('time','')}] {m.get('who','')}：{m.get('text','')[:120]}")
+        _d = m.get('day') or m.get('d') or ''
+        _tm = m.get('time') or m.get('m') or ''
+        _w = m.get('who') or m.get('s') or ''
+        _t = m.get('text') or m.get('t') or ''
+        out.append(f"- [{_d} {_tm}] {_w}：{_t[:120]}")
     return out
 
 
