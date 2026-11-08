@@ -22,8 +22,8 @@ _os0.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
 
 import numpy as np
 
-ROOT = os.environ.get("MEM_DIR", "./data/memory")
-MEM = ROOT if os.path.basename(os.path.normpath(ROOT)) != "记忆" else os.path.join(ROOT, "记忆")
+ROOT = r"."
+MEM = os.path.join(ROOT, "记忆")
 IDX = os.path.join(MEM, "索引")
 SHARED = os.path.join(MEM, "共享记忆.md")
 ARCHIVE = os.path.join(MEM, "归档.md")
@@ -164,6 +164,13 @@ def load_index():
 
 
 def main():
+    if "--rebuild" in __import__("sys").argv:
+        for _f in (META, VEC, STATE):
+            try:
+                os.remove(_f)
+            except OSError:
+                pass
+    """重建前先清空索引，否则 --rebuild 会在旧索引上追加，条目翻倍。"""
     rebuild = "--rebuild" in sys.argv
     os.makedirs(IDX, exist_ok=True)
     all_items = entries()

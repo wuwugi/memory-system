@@ -210,7 +210,24 @@ def save_facts(rows):
 
 
 
-def reconcile(st, rows):
+
+
+
+def write_mem_line(fa, line):
+    """写回忆行前先查重：同样的行已经在归档里就不写第二次。"""
+    try:
+        body = line.strip()
+        if body:
+            txt = io.open(ARCH, encoding='utf-8', errors='ignore').read()
+            if body in txt:
+                print(f'  跳过重复回忆行：{body[:40]}')
+                return False
+    except Exception:
+        pass
+    fa.write(line)
+    return True
+
+def reconcile(st, rows, skip=None):
     """跑完自检：补齐回忆状态、清孤儿、清无效待删、去掉不存在的 orig。幂等。"""
     mem_h = set()
     for r in rows:
@@ -233,7 +250,28 @@ def reconcile(st, rows):
     except Exception:
         pass
     added = dropped = badpend = fixed = 0
+    skip = skip or set()
+    # 重新扫一遍归档，按当前真实内容判定孤儿（不要用本轮开头读的旧清单）
+    fresh = set()
+    try:
+        for l in io.open(ARCH, encoding='utf-8', errors='ignore'):
+            mm = dz.LINE.match(l.strip())
+            if mm:
+                lab = mm.group(5).strip()
+                if '回忆·' in lab or '主题·' in lab:
+                    fresh.add(h_of(f'{mm.group(1)}-{mm.group(2)}', lab,
+                                   mm.group(6).strip(), mm.group(3) + ':' + mm.group(4)))
+    except Exception:
+        fresh = mem_h
+    for k in list(st.keys()):
+        if k.startswith(('pending:', 'cache:')):
+            continue
+        v = st.get(k)
+        if isinstance(v, dict) and v.get('stage', 0) >= 1 and k not in fresh:
+            st.pop(k, None)
     for h in mem_h:
+        if h in skip:          # 这一轮刚被恢复删掉的行，别再补状态
+            continue
         if h not in st:
             st[h] = {'stage': 1, 'n': 0, 'interval': interval_of(0), 'ratio': ratio_of(0),
                      'proc_days': proc_of(0), 'lastHit': int(now_ts()),
@@ -464,7 +502,15 @@ def main():
                     _label = (surface + '·' + _who) if surface else _who
                     if len(chunks) > 1:
                         _label += f'·{_ci}/{len(chunks)}'
-                    fa.write(f'- **{day} {chunk[0]["time"]} · 回忆·{_label}**：{s1}\n')
+                    _wrote = write_mem_line(fa, f'- **{day} {chunk[0]["time"]} · 回忆·{_label}**：{s1}\n')
+                    if not _wrote:
+                        # 这行已经存在（别的批次写过），原文照样挂到那条回忆上就行，
+                        # 不要再造一条新状态，否则会和已有行对不上
+                        for h in [it['h'] for it in chunk]:
+                            st.pop(h, None)
+                            st['pending:' + h] = int(now + interval_of(0) * DAY)
+                        save_state(st)
+                        continue
                     hs = [it['h'] for it in chunk]
                     new_h = h_of(day, _label, s1, chunk[0]['time'])
                     for h in hs:
@@ -502,7 +548,13 @@ def main():
             level = '回忆' if stage == 1 else '主题'
             _label = (surface + '·' + who) if surface else who
             with io.open(ARCH, 'a', encoding='utf-8') as fa:
-                fa.write(f'- **{day} {items[0]["time"]} · {level}·{_label}**：{s}\n')
+                _wrote2 = write_mem_line(fa, f'- **{day} {items[0]["time"]} · {level}·{_label}**：{s}\n')
+                if not _wrote2:
+                    for it in items:
+                        st.pop(it['h'], None)
+                        st.pop('pending:' + it['h'], None)
+                    save_state(st)
+                    continue
             for it in items:
                 _drop.add(it['line'])                 # 上一级那行要删掉，别越压越多
                 st.pop(it['h'], None)
@@ -576,7 +628,7 @@ def main():
                and now - (v.get('at') or 0) > CACHE_DAYS * DAY]:
         st.pop(_k, None)
 
-    reconcile(st, rows)
+    reconcile(st, rows, set(to_restore))
     save_state(st)
     print(f'本轮处理 {done} 个包')
 
