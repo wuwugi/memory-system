@@ -63,6 +63,10 @@ def _kw_score(q_grams, text):
 
 def query(dirpath, q, top=8, semantic=True):
     meta, vec = _load(dirpath)
+    try:
+        st = json.load(io.open(os.path.join(dirpath, '记忆状态.json'), encoding='utf-8'))
+    except Exception:
+        st = {}
     if not meta:
         return _scan(dirpath, q, top)
     grams = _bigrams(q)
@@ -77,6 +81,17 @@ def query(dirpath, q, top=8, semantic=True):
             sim = vec @ qv[0]
             for i in range(len(scores)):
                 scores[i] = 0.6 * float(sim[i]) + 0.4 * scores[i]
+
+    # 缓冲期内原文为主：原文还在时，回忆行降权当备胎
+    for i, m in enumerate(meta):
+        w = (m.get('who') or '') + (m.get('text') or '')[:16]
+        if '回忆·' in w or '主题·' in w:
+            rec = st.get(m.get('h')) or {}
+            orig = rec.get('orig') or []
+            if any(('pending:' + o) in st for o in orig):
+                scores[i] *= 0.55
+        elif ('pending:' + (m.get('h') or '')) in st:
+            scores[i] *= 1.15
 
     order = sorted(range(len(meta)), key=lambda i: -scores[i])[:top]
     out = []

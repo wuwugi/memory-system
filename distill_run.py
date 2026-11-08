@@ -66,7 +66,25 @@ def load_state():
 
 
 def save_state(st):
-    io.open(STATE, 'w', encoding='utf-8').write(json.dumps(st, ensure_ascii=False, indent=0))
+    """原子写：先写临时文件再替换，避免写到一半崩溃把状态写坏"""
+    tmp = STATE + '.tmp'
+    io.open(tmp, 'w', encoding='utf-8').write(json.dumps(st, ensure_ascii=False, indent=0))
+    os.replace(tmp, STATE)
+
+
+def rewrite_archive(drop_hashes):
+    """按哈希删行；写之前重新读一遍，避免把这段时间新追加的聊天记录冲掉"""
+    keep = []
+    for l in io.open(ARCH, encoding='utf-8', errors='ignore').read().splitlines():
+        m = dz.LINE.match(l.strip())
+        if m:
+            h = h_of(f'{m.group(1)}-{m.group(2)}', m.group(5).strip(), m.group(6).strip())
+            if h in drop_hashes:
+                continue
+        keep.append(l)
+    tmp = ARCH + '.tmp'
+    io.open(tmp, 'w', encoding='utf-8').write('\n'.join(keep) + '\n')
+    os.replace(tmp, ARCH)
 
 
 def read_rows():
@@ -208,8 +226,13 @@ def main():
         stage = int(rec.get('stage', 0))
         n = int(rec.get('n', 0))
         if rec.get('active'):
-            active_skip += 1
-            continue
+            # 冷却够了就解冻；否则被提过一次的条目会永久冻结、再也不压不删
+            _nd = float(rec.get('nextDue') or 0)
+            if now < _nd:
+                active_skip += 1
+                continue
+            rec['active'] = False
+            st[r['h']] = rec
         if dz.is_protected(r['text']) or dz.is_fact(r['text']):
             prot += 1
             continue
@@ -273,6 +296,9 @@ def main():
         for mh in to_restore:
             rec = st.get(mh) or {}
             orig = rec.get('orig') or []
+            if not orig:              # 原文这时候本来就没了，别把这条回忆也删掉
+                rec.pop('restore', None)
+                continue
             alive = [o for o in orig if ('pending:' + o) in st]
             if alive:
                 _n = max(1, int((rec or {}).get('n', 0)))      # 保留原来被提起的次数
@@ -287,9 +313,12 @@ def main():
             st.pop(mh, None)
         _drop_lines = {_mem_hash[h] for h in to_restore if h in _mem_hash}
         if _drop_lines:
-            keep_ = [l for l in io.open(ARCH, encoding='utf-8', errors='ignore').read().splitlines()
-                     if l not in _drop_lines]
-            io.open(ARCH, 'w', encoding='utf-8').write('\n'.join(keep_) + '\n')
+            _hs = set()
+            for _l in _drop_lines:
+                _mm = dz.LINE.match(_l.strip())
+                if _mm:
+                    _hs.add(h_of(f'{_mm.group(1)}-{_mm.group(2)}', _mm.group(5).strip(), _mm.group(6).strip()))
+            rewrite_archive(_hs)
         save_state(st)
         print(f'恢复：{done_r} 个包回到 S0（整包原文全部恢复，回忆行已删）')
 
@@ -405,8 +434,7 @@ def main():
         with io.open(FORGET, 'a', encoding='utf-8') as f:
             f.write(f"- **{time.strftime('%Y-%m-%d')}** 忘了 {len(victims)} 条\n")
         hs = {v['h'] for v in victims}
-        keep = [r['line'] for r in rows if r['h'] not in hs]
-        io.open(ARCH, 'w', encoding='utf-8').write('\n'.join(keep) + '\n')
+        rewrite_archive(hs)
         tomb = []
         if os.path.exists(TOMB):
             try:
@@ -418,15 +446,37 @@ def main():
         for v in victims:
             st.pop(v['h'], None)
         save_state(st)
-        print(f'S3→S4：删掉 {len(victims)} 条')
+            # 过渡区里的副本也要删，否则原文只是搬了个地方，根本没忘
+        try:
+            for _f in os.listdir(COLD):
+                if not _f.endswith('.md'):
+                    continue
+                _p = os.path.join(COLD, _f)
+                _keep = []
+                _ch = 0
+                for _l in io.open(_p, encoding='utf-8', errors='ignore').read().splitlines():
+                    _mm = dz.LINE.match(_l.strip())
+                    if _mm:
+                        _h = h_of(f'{_mm.group(1)}-{_mm.group(2)}', _mm.group(5).strip(), _mm.group(6).strip())
+                        if _h in hs:
+                            _ch += 1
+                            continue
+                    _keep.append(_l)
+                if _ch:
+                    io.open(_p, 'w', encoding='utf-8').write('\n'.join(_keep) + '\n')
+                    print(f'  过渡区 {_f} 清掉 {_ch} 条')
+        except Exception as _e:
+            print(f'  过渡区清理失败：{_e}')
+
+    print(f'S3→S4：删掉 {len(victims)} 条')
 
     if _drop:
-        keep2 = []
-        for l in io.open(ARCH, encoding='utf-8', errors='ignore').read().splitlines():
-            if l in _drop:
-                continue
-            keep2.append(l)
-        io.open(ARCH, 'w', encoding='utf-8').write('\n'.join(keep2) + '\n')
+        _hs2 = set()
+        for _l in _drop:
+            _mm = dz.LINE.match(_l.strip())
+            if _mm:
+                _hs2.add(h_of(f'{_mm.group(1)}-{_mm.group(2)}', _mm.group(5).strip(), _mm.group(6).strip()))
+        rewrite_archive(_hs2)
         print(f'删掉被替换的上一级回忆 {len(_drop)} 行')
 
     # 缓存只留 180 天，别无限长
