@@ -78,12 +78,12 @@ cp memory_system/config.example.json memory_system/config.json
 
 ```
 main.py               AstrBot 适配：写入、注入、钩子、每日维护
-core/store.py         归档写入（哈希、去重）
-core/hot.py           热层（长期事实 / 近 7 天摘要）
-core/search.py        检索（关键词 + 语义，可退化）
-core/distill.py       压缩与保护类判断
-core/distill_run.py   状态机：分包、到期、恢复、删除
-core/rag_index.py     向量索引
+store.py            归档写入（哈希、去重）
+hot.py               热层（长期事实 / 近 7 天摘要）
+search.py            检索（关键词 + 语义，可退化）
+distill.py           压缩与保护类判断
+distill_run.py       状态机：分包、到期、恢复、删除
+rag_index.py         向量索引
 docs/                 安装 / 使用说明 / 注意事项
 demo.md      示例数据（虚构）
 ```
@@ -102,9 +102,9 @@ demo.md      示例数据（虚构）
 
 ```bash
 cd data/memory
-python ../../plugins/memory_system/core/distill_run.py            # 预演
-python ../../plugins/memory_system/core/distill_run.py --apply --limit 3
-python ../../plugins/memory_system/core/distill_run.py --purge
+python ../../plugins/memory_system/distill_run.py                # 预演
+python ../../plugins/memory_system/distill_run.py --apply --limit 3
+python ../../plugins/memory_system/distill_run.py --purge
 ```
 
 ## 注意

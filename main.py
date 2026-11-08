@@ -12,8 +12,18 @@ import re
 import time
 
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.star import Context, Star, register
-from astrbot.core import logger
+from astrbot.api.star import Context, Star
+try:
+    from astrbot.api.star import register
+except Exception:            # 老版本没有 register，用空装饰器顶上
+    def register(*a, **kw):
+        def deco(cls):
+            return cls
+        return deco
+try:
+    from astrbot.api import logger
+except Exception:
+    from astrbot.core import logger
 
 try:
     from .core import store, hot, search
@@ -42,6 +52,14 @@ def _cfg(ctx):
         raw = ctx.get_config() or {}
     except Exception:
         raw = {}
+    if not raw:
+        try:
+            _here = os.path.dirname(os.path.abspath(__file__))
+            _p = os.path.join(_here, 'config.json')
+            if os.path.exists(_p):
+                raw = json.load(io.open(_p, encoding='utf-8'))
+        except Exception:
+            raw = {}
     out = json.loads(json.dumps(CFG_DEFAULT))
     for k, v in (raw or {}).items():
         if isinstance(v, dict) and isinstance(out.get(k), dict):
