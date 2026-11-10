@@ -6,7 +6,7 @@
     "model": "deepseek-chat"
   },
   "search": {
-    "top_k": 8,
+    "top_k": 10,
     "enable_semantic": true,
     "daily_limit": 3
   },
@@ -15,5 +15,9 @@
     "chunk_max_chars": 6000,
     "cache_days": 90
   },
-  "people": {}
+  "people": {},
+  "profile": {
+    "enabled": true,
+    "note": "每天跑一次 python profile.py，抽用户档案"
+  }
 }

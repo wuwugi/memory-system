@@ -147,6 +147,18 @@ class MemorySystem(Star):
             facts = hot.facts(self.dir)
             if facts:
                 parts.append('### 长期事实\n' + facts)
+            prof_path = os.path.join(self.dir, '用户档案.md')
+            if os.path.exists(prof_path):
+                _p = []
+                _n = 0
+                for _l in io.open(prof_path, encoding='utf-8', errors='ignore').read().splitlines():
+                    if _l.startswith('- '):
+                        _p.append(_l[2:].replace('**', '').strip()[:80])
+                        _n += len(_l)
+                        if _n > 400:
+                            break
+                if _p:
+                    parts.append('### 用户档案（可能过时，与对话冲突时以对话为准）\n' + '\n'.join('- ' + x for x in _p))
             warm = hot.recent(self.dir, days=7)
             if warm:
                 parts.append('### 最近几天\n' + warm)
@@ -158,6 +170,10 @@ class MemorySystem(Star):
                     parts.append('### 相关旧事\n' + '\n'.join(hits))
             if not parts:
                 return
+            parts.append('### 回答纪律\n'
+                         '- 只写上面材料里出现过的日期、数字、人名；拿不准就不写，不要补细节。\n'
+                         '- 档案可能过时，与「相关旧事」冲突时以旧事为准。\n'
+                         '- 材料里确实没有，就直说不知道。')
             block = f'{MARK_START}\n' + '\n\n'.join(parts) + f'\n{MARK_END}'
             req.system_prompt = (req.system_prompt or '') + '\n\n' + block
         except Exception as e:
