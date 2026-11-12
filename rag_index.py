@@ -12,6 +12,7 @@
 """
 import hashlib
 import io
+import re as _re
 import json
 import os
 import sys
@@ -103,12 +104,19 @@ def entries():
         except OSError:
             continue
         for l in lines:
-            if not l.startswith("- **"):
-                continue
-            p = parse(l)
-            if not p:
-                continue
-            d, hm, sender, text = p
+            if kind == "fact":
+                # 事实库行格式：- [MM-DD] 谁：内容
+                _m = _re.match(r"^- \[(\d\d-\d\d)\]\s*([^：:]{1,40})[：:]\s*(.+)$", l)
+                if not _m:
+                    continue
+                d, hm, sender, text = _m.group(1), "00:00", _m.group(2), _m.group(3)
+            else:
+                if not l.startswith("- **"):
+                    continue
+                p = parse(l)
+                if not p:
+                    continue
+                d, hm, sender, text = p
             text = text.strip()
             if len(text) < 3:
                 continue
@@ -176,6 +184,18 @@ def main():
     all_items = entries()
     st = load_state()
     seen = set() if rebuild else set(st.get("seen") or [])
+    # rebuild 之后 state 是空的；如果此时增量任务并发跑，会把整库再追加一遍
+    # （2026-11-12 索引翻倍就是这个原因）。所以把已有 META 的哈希也算进 seen。
+    if not rebuild:
+        try:
+            if os.path.exists(META):
+                for _l in io.open(META, encoding="utf-8", errors="ignore"):
+                    if _l.strip():
+                        _m = json.loads(_l)
+                        if _m.get("h"):
+                            seen.add(_m["h"])
+        except Exception:
+            pass
     # 同一轮里同 hash 只能进一条（否则 8 行相同文本会全部入库）
     _uniq = {}
     for _x in all_items:
@@ -186,7 +206,12 @@ def main():
         print("[索引] 没有新条目")
         return
     print(f"[索引] 待处理 {len(todo)} 条（已有 {len(seen)} 条）")
-    model = embedder()
+    try:
+        model = embedder()
+    except Exception as e:
+        print(f"[索引] 没装 fastembed（{type(e).__name__}），跳过语义索引；"
+              f"检索会退化为关键词匹配。装法：pip install fastembed")
+        return
     texts = [x["t"] for x in todo]
     vecs = np.array(list(model.embed(texts, batch_size=32)), dtype=np.float32)
     # 归一化，后面用点积当余弦

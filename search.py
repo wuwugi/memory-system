@@ -72,7 +72,7 @@ def query(dirpath, q, top=8, semantic=True):
     grams = _bigrams(q)
     scores = [0.0] * len(meta)
     for i, m in enumerate(meta):
-        scores[i] = _kw_score(grams, m.get('text', ''))
+        scores[i] = _kw_score(grams, m.get('text') or m.get('t') or '')
 
     if semantic and vec is not None and len(meta) == len(vec):
         qv = _embed([q])

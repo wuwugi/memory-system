@@ -111,9 +111,42 @@ FACT = [
 
 
 def is_fact(text):
-    """约定/承诺/亲属/生日/金额/账号 —— 这类不模糊化，直接进长期事实。"""
-    t = text or ''
-    return any(p.search(t) for p in FACT)
+    """约定/承诺/亲属/生日/金额/账号 —— 这类不模糊化，直接进长期事实。
+
+    2026-11-12 收紧：必须"主体 + 具体信息"，泛泛一句"我记着"不算；
+    提问、求助、任务指令（带问号、问个问题、帮我、怎么）也不算。
+    """
+    t = (text or '').strip()
+    if len(t) < 8:
+        return False
+    if t.endswith(('？', '?')) or '问个问题' in t or '帮我' in t or '怎么' in t:
+        return False
+    if re.search(r'记不记得|记得吗|还记不记得|知道吗', t):
+        return False
+    if is_protected(t):
+        return False
+
+    # 承诺 + 明确时间/对象
+    if re.search(r'(答应|承诺|说好|约好|约定|保证)[^。]{0,16}'
+                 r'(你|我|他|她|明天|后天|下周|周末|月底|\d{1,2}\s*号|\d{1,2}\s*月)', t):
+        return True
+    # 生日/纪念日 + 具体日期
+    if re.search(r'(生日|纪念日)[^。]{0,8}(\d{1,2}\s*月|\d{1,2}\s*号|\d{1,2}/\d{1,2})', t):
+        return True
+    # 亲属/重要的人 + 具体信息
+    if re.search(r'(我姐|我妈|我爸|我哥|我弟|我妹|姑姑|外婆|奶奶|爷爷|舅舅|姨)[^。]{0,10}'
+                 r'(叫|名字|是|住|在|做|上班|给|送|病|生日|充|给了)', t):
+        return True
+    # 亲属 + 金额
+    if re.search(r'(姑姑|妈|姐|哥|弟|妹|爸|外婆|奶奶)[^。]{0,10}(\d+\s*块|充|送了)', t):
+        return True
+    # 借还/转账 + 金额
+    if re.search(r'(借|还|欠|充|转|给)[^。]{0,8}\d+\s*(块|元|块钱)', t):
+        return True
+    # 账号密码
+    if re.search(r'(QQ|微信|账号|密码)[^。]{0,8}\d{5,}', t):
+        return True
+    return False
 
 
 def is_protected(text):
